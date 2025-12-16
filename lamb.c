@@ -1,12 +1,76 @@
-// cc -o lamb lamb.c
+// cc -pedantic -std=c99 -o lamb lamb.c
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
+#include <stdarg.h>
 #include <string.h>
+#include <ctype.h>
 
-#define NOB_IMPLEMENTATION
-#define NOB_STRIP_PREFIX
-#include "nob.h"
+char *copy_string(const char *s)
+{
+    int n = strlen(s);
+    char *ds = malloc(n + 1);
+    assert(ds);
+    memcpy(ds, s, n);
+    ds[n] = '\0';
+    return ds;
+}
+
+#define UNUSED(value) (void)(value)
+#define TODO(message) do { fprintf(stderr, "%s:%d: TODO: %s\n", __FILE__, __LINE__, message); abort(); } while(0)
+#define UNREACHABLE(message) do { fprintf(stderr, "%s:%d: UNREACHABLE: %s\n", __FILE__, __LINE__, message); abort(); } while(0)
+
+#define DA_INIT_CAP 256
+#define da_reserve(da, expected_capacity)                                                  \
+    do {                                                                                   \
+        if ((expected_capacity) > (da)->capacity) {                                        \
+            if ((da)->capacity == 0) {                                                     \
+                (da)->capacity = DA_INIT_CAP;                                              \
+            }                                                                              \
+            while ((expected_capacity) > (da)->capacity) {                                 \
+                (da)->capacity *= 2;                                                       \
+            }                                                                              \
+            (da)->items = realloc((da)->items, (da)->capacity * sizeof(*(da)->items));     \
+            assert((da)->items != NULL && "Buy more RAM lol");                             \
+        }                                                                                  \
+    } while (0)
+
+#define da_append(da, item)                  \
+    do {                                     \
+        da_reserve((da), (da)->count + 1);   \
+        (da)->items[(da)->count++] = (item); \
+    } while (0)
+
+#define sb_append_null(sb) da_append(sb, 0)
+
+typedef struct {
+    char *items;
+    size_t count;
+    size_t capacity;
+} String_Builder;
+
+int sb_appendf(String_Builder *sb, const char *fmt, ...)
+{
+    va_list args;
+
+    va_start(args, fmt);
+    int n = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+
+    // NOTE: the new_capacity needs to be +1 because of the null terminator.
+    // However, further below we increase sb->count by n, not n + 1.
+    // This is because we don't want the sb to include the null terminator. The user can always sb_append_null() if they want it
+    da_reserve(sb, sb->count + n + 1);
+    char *dest = sb->items + sb->count;
+    va_start(args, fmt);
+    vsnprintf(dest, n+1, fmt, args);
+    va_end(args);
+
+    sb->count += n;
+
+    return n;
+}
 
 typedef enum {
     EXPR_VAR,
@@ -348,7 +412,7 @@ Expr *parse_expr(Lexer *l);
 Expr *parse_fun(Lexer *l)
 {
     if (!lexer_expect(l, TOKEN_NAME)) return NULL;
-    const char *arg = strdup(l->name.items);
+    const char *arg = copy_string(l->name.items);
     if (!lexer_expect(l, TOKEN_DOT)) return NULL;
 
     Token_Kind a, b;
@@ -380,7 +444,7 @@ Expr *parse_primary(Lexer *l)
         return expr;
     }
     case TOKEN_LAMBDA: return parse_fun(l);
-    case TOKEN_NAME: return var(strdup(l->name.items));
+    case TOKEN_NAME: return var(copy_string(l->name.items));
     default:
         lexer_print_loc(l, stderr);
         fprintf(stderr, "ERROR: Unexpected token %s\n", token_kind_display(l->token));

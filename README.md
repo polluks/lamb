@@ -16,3 +16,5 @@ Enter :help for more info
 λ> (\f.(\x.f (x x)) (\x.f (x x))) g
 ...
 ```
+
+It's recommended to use Lamb with [rlwrap](https://github.com/hanslub42/rlwrap).

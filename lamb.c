@@ -1,4 +1,4 @@
-// ,---@.
+// ,---@>
 //  W-W'
 // cc -pedantic -std=c99 -o lamb lamb.c
 #include <assert.h>
@@ -527,11 +527,11 @@ int main(void)
     static Commands commands = {0};
 
     size_t limit = 10;
-    printf(",---@.\n");
+    printf(",---@>\n");
     printf(" W-W'\n");
     printf("Enter :help for more info\n");
     for (;;) {
-        printf("𝛌> ");
+        printf("@> ");
         fflush(stdout);
         if (!fgets(buffer, sizeof(buffer), stdin)) break;
         const char *source = buffer;

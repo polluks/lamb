@@ -27,4 +27,102 @@ g (g (g (g (g (g (g (g ((\x.g (x x)) (\x.g (x x))))))))))
 ...
 ```
 
-It's recommended to use Lamb with [rlwrap](https://github.com/hanslub42/rlwrap).
+It's recommended to use Lamb with [rlwrap](https://github.com/hanslub42/rlwrap). Just do
+
+```console
+$ rlwrap ./lamb
+```
+
+and you get Bash-style history and command line navigation.
+
+## Syntax
+
+The syntax is based on the [Notation of Untype Lambda Calculus](https://en.wikipedia.org/wiki/Lambda_calculus_definition#Notation) and provides few improvements over it.
+
+### Variables
+
+Variables are any alphanumeric names:
+
+```
+λ> x
+x
+λ> hello69
+hello69
+λ> 69420
+69420
+λ>
+```
+
+Yes, fully numeric sequences of characters are also considered names, because they are alphanumeric. This may change in the future.
+
+### Functions
+
+To denote functions instead of small greek almbda `λ` we use backslash `\` (this may change in the future, we are considering allowing `λ` as an alternative):
+
+```
+λ> \x.x
+\x.x
+λ> \x.\y.x
+\x.\y.x
+λ>
+```
+
+The body of the function extends as far right as possible. Use parenthesis to denote the boundaries of the function:
+
+```
+𝛌> \x.x x
+\x.x x
+𝛌> (\x.x) x
+(\x.x) x
+x
+𝛌>
+```
+
+Since the variable names can be longer than 1 character we can't use that silly mathematician trick of stitching their names together by saying that `\xy.x` means `\x.\y.x`, because in Lamb it just means it's a single function with a parameter `xy`:
+
+```
+λ> \xy.x
+\xy.x
+𝛌> (\xy.x) z
+(\xy.x) z
+x
+λ>
+```
+
+Instead we allow you to drop consequent backslashes turning the dot `.` into a parameter separator:
+
+```
+𝛌> \x.y.x
+\x.\y.x
+𝛌> (\x.y.x) z
+(\x.\y.x) z
+\y.z
+𝛌>
+```
+
+## Applications
+
+Just separate two lambda expressions with a space:
+
+```
+𝛌> (\x.x) x
+(\x.x) x
+x
+𝛌>
+```
+
+You can drop parenthesis if the expression is unambiguous:
+
+```
+𝛌> f \x.x
+f (\x.x)
+𝛌>
+```
+
+Applications are left-associative:
+
+```
+𝛌> f a b c d
+(((f a) b) c) d
+𝛌>
+```

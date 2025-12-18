@@ -8,6 +8,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
 
 #if defined(__GNUC__) || defined(__clang__)
 //   https://gcc.gnu.org/onlinedocs/gcc-4.7.2/gcc/Function-Attributes.html
@@ -137,6 +138,17 @@ struct Expr {
     } as;
 };
 
+typedef struct {
+    const char *name;
+    Expr_Index body;
+} Binding;
+
+typedef struct {
+    Binding *items;
+    size_t count;
+    size_t capacity;
+} Bindings;
+
 struct {
     Expr *items;
     size_t count;
@@ -235,10 +247,10 @@ void expr_display(Expr_Index expr, String_Builder *sb)
 {
     switch (expr_slot(expr).kind) {
     case EXPR_VAR:
-        sb_appendf(sb, "%s", expr_slot(expr).as.var.name);
+        sb_appendf(sb, "%s@%zu", expr_slot(expr).as.var.name, expr_slot(expr).as.var.id);
         break;
     case EXPR_FUN:
-        sb_appendf(sb, "\\%s.", expr_slot(expr).as.fun.arg.name);
+        sb_appendf(sb, "\\%s@%zu.", expr_slot(expr).as.fun.arg.name, expr_slot(expr).as.fun.arg.id);
         expr_display(expr_slot(expr).as.fun.body, sb);
         break;
     case EXPR_APP: {
@@ -328,6 +340,26 @@ void trace_expr(Expr_Index expr, String_Builder *sb)
     printf("%s\n", sb->items);
 }
 
+Expr_Index clone_expr(Expr_Index expr)
+{
+    switch (expr_slot(expr).kind) {
+    case EXPR_VAR: {
+        return var(expr_slot(expr).as.var.name);
+    } break;
+    case EXPR_FUN: {
+        return fun(
+            expr_slot(expr).as.fun.arg.name,
+            clone_expr(expr_slot(expr).as.fun.body));
+    } break;
+    case EXPR_APP: {
+        return app(
+            clone_expr(expr_slot(expr).as.app.lhs),
+            clone_expr(expr_slot(expr).as.app.rhs));
+    } break;
+    default: UNREACHABLE("Expr_Kind");
+    }
+}
+
 void bind_var(Expr_Index body, Var_Name var)
 {
     switch (expr_slot(body).kind) {
@@ -376,6 +408,8 @@ typedef enum {
     TOKEN_LAMBDA,
     TOKEN_DOT,
     TOKEN_COLON,
+    TOKEN_SEMICOLON,
+    TOKEN_EQUALS,
     TOKEN_NAME,
 } Token_Kind;
 
@@ -390,6 +424,8 @@ const char *token_kind_display(Token_Kind kind)
     case TOKEN_DOT:     return "TOKEN_DOT";
     case TOKEN_NAME:    return "TOKEN_NAME";
     case TOKEN_COLON:   return "TOKEN_COLON";
+    case TOKEN_SEMICOLON:   return "TOKEN_SEMICOLON";
+    case TOKEN_EQUALS:   return "TOKEN_EQUALS";
     default: UNREACHABLE("Token_Kind");
     }
 }
@@ -454,6 +490,8 @@ bool lexer_next(Lexer *l)
     case '\\': l->token = TOKEN_LAMBDA; return true;
     case '.':  l->token = TOKEN_DOT;    return true;
     case ':':  l->token = TOKEN_COLON;  return true;
+    case ';':  l->token = TOKEN_SEMICOLON;  return true;
+    case '=':  l->token = TOKEN_EQUALS; return true;
     }
 
     if (isalnum(x)) {
@@ -543,7 +581,7 @@ bool parse_expr(Lexer *l, Expr_Index *expr)
 {
     if (!parse_primary(l, expr)) return false;
     if (!lexer_peek(l)) return false;
-    while (l->token != TOKEN_CPAREN && l->token != TOKEN_END) {
+    while (l->token != TOKEN_CPAREN && l->token != TOKEN_END && l->token != TOKEN_SEMICOLON) {
         Expr_Index rhs;
         if (!parse_primary(l, &rhs)) return false;
         *expr = app(*expr, rhs);
@@ -603,6 +641,7 @@ void print_available_commands(Commands *commands)
 
 void gc_mark(Expr_Index root)
 {
+    if (expr_slot(root).visited) return;
     expr_slot(root).visited = true;
     switch (expr_slot(root).kind) {
     case EXPR_VAR: break;
@@ -616,7 +655,7 @@ void gc_mark(Expr_Index root)
     }
 }
 
-void gc(Expr_Index root)
+void gc(Expr_Index root, Bindings bindings)
 {
     for (size_t i = 0; i < expr_pool.count; ++i) {
         if (expr_pool.items[i].live) {
@@ -625,6 +664,9 @@ void gc(Expr_Index root)
     }
 
     gc_mark(root);
+    for (size_t i = 0; i < bindings.count; ++i) {
+        gc_mark(bindings.items[i].body);
+    }
 
     for (size_t i = 0; i < expr_pool.count; ++i) {
         if (expr_pool.items[i].live && !expr_pool.items[i].visited) {
@@ -633,89 +675,212 @@ void gc(Expr_Index root)
     }
 }
 
-int main(void)
+bool read_entire_file(const char *path, String_Builder *sb)
+{
+    FILE *f = fopen(path, "rb");
+    size_t new_count = 0;
+    long long m = 0;
+    if (f == NULL)                 goto fail;
+    if (fseek(f, 0, SEEK_END) < 0) goto fail;
+#ifndef _WIN32
+    m = ftell(f);
+#else
+    m = _ftelli64(f);
+#endif
+    if (m < 0)                     goto fail;
+    if (fseek(f, 0, SEEK_SET) < 0) goto fail;
+
+    new_count = sb->count + m;
+    if (new_count > sb->capacity) {
+        sb->items = realloc(sb->items, new_count);
+        assert(sb->items != NULL && "Buy more RAM lool!!");
+        sb->capacity = new_count;
+    }
+
+    fread(sb->items + sb->count, m, 1, f);
+    if (ferror(f)) {
+        // TODO: Afaik, ferror does not set errno. So the error reporting in defer is not correct in this case.
+        goto fail;
+    }
+    sb->count = new_count;
+
+    fclose(f);
+    return true;
+fail:
+    fprintf(stderr, "ERROR: Could not read file %s: %s\n", path, strerror(errno));
+    if (f) fclose(f);
+    return false;
+}
+
+void create_binding(Bindings *bindings, const char *name, Expr_Index body)
+{
+    for (size_t i = 0; i < bindings->count; ++i) {
+        if (bindings->items[i].name == name) {
+            bindings->items[i].body = body;
+            printf("Updated binding %s\n", name);
+            return;
+        }
+    }
+    Binding binding = {
+        .name = name,
+        .body = body,
+    };
+    da_append(bindings, binding);
+    printf("Created binding %s\n", name);
+}
+
+bool create_bindings_from_file(const char *file_path, String_Builder *sb, Bindings *bindings)
+{
+    sb->count = 0;
+    if (!read_entire_file(file_path, sb)) return false;
+    Lexer l = {
+        .content = sb->items,
+        .count = sb->count,
+        .file_path = file_path,
+    };
+    if (!lexer_peek(&l)) return false;
+    while (l.token != TOKEN_END) {
+        if (!lexer_expect(&l, TOKEN_NAME)) return false;
+        const char *name = intern(l.name.items);
+        if (!lexer_expect(&l, TOKEN_EQUALS)) return false;
+        Expr_Index body;
+        if (!parse_expr(&l, &body)) return false;
+        if (!lexer_expect(&l, TOKEN_SEMICOLON)) return false;
+        create_binding(bindings, name, body);
+        if (!lexer_peek(&l)) return false;
+    }
+    return true;
+}
+
+int main(int argc, char **argv)
 {
     static char buffer[1024];
     static String_Builder sb = {0};
     static Commands commands = {0};
+    static Bindings bindings = {0};
 
-    size_t limit = 10;
+    for (int i = 1; i < argc; ++i) {
+        create_bindings_from_file(argv[i], &sb, &bindings);
+    }
+    sb.count = 0;
+
+    size_t limit = 0;
+    bool trace = false;
     printf(",---@>\n");
     printf(" W-W'\n");
     printf("Enter :help for more info\n");
     for (;;) {
+again:
         printf("@> ");
         fflush(stdout);
-        if (!fgets(buffer, sizeof(buffer), stdin)) break;
+        if (!fgets(buffer, sizeof(buffer), stdin)) goto quit;
         const char *source = buffer;
         Lexer l = {
             .content = source,
             .count = strlen(source),
         };
 
-        if (!lexer_peek(&l)) continue;
+        if (!lexer_peek(&l)) goto again;
         if (l.token == TOKEN_COLON) {
-            if (!lexer_next(&l)) continue;
-            if (!lexer_expect(&l, TOKEN_NAME)) continue;
+            if (!lexer_next(&l)) goto again;
+            if (!lexer_expect(&l, TOKEN_NAME)) goto again;
             commands.count = 0;
+            if (command(&commands, l.name.items, "trace", "", "toggle tracing")) {
+                trace = !trace;
+                if (trace) {
+                    printf("Tracing ENABLED\n");
+                } else {
+                    printf("Tracing DISABLED\n");
+                }
+                goto again;
+            }
+            if (command(&commands, l.name.items, "reload", "", "reload all the loaded files")) {
+                bindings.count = 0;
+                for (int i = 1; i < argc; ++i) {
+                    create_bindings_from_file(argv[i], &sb, &bindings);
+                }
+                sb.count = 0;
+                goto again;
+            }
             if (command(&commands, l.name.items, "intern", "", "print amount of interned strings")) {
                 printf("Interns: %zu\n", strings.count);
-                continue;
+                goto again;
             }
             if (command(&commands, l.name.items, "limit", "[number]", "change evaluation limit (0 for no limit)")) {
-                if (!lexer_peek(&l)) continue;
+                if (!lexer_peek(&l)) goto again;
                 switch (l.token) {
                 case TOKEN_NAME:
-                    if (!lexer_expect(&l, TOKEN_NAME)) continue;
+                    if (!lexer_expect(&l, TOKEN_NAME)) goto again;
                     limit = strtoul(l.name.items, NULL, 10);
                     if (limit) {
                         printf("Setting evaluation limit to %zu\n", limit);
                     } else {
                         printf("Evaluation limit is disabled\n");
                     }
-                    continue;
+                    goto again;
                 case TOKEN_END:
                     if (limit) {
                         printf("Evaluation limit is %zu\n", limit);
                     } else {
                         printf("Evaluation limit is disabled\n");
                     }
-                    continue;
+                    goto again;
                 default:
                     lexer_print_loc(&l, stderr);
                     fprintf(stderr, "ERROR: Unexpected token %s\n", token_kind_display(l.token));
-                    continue;
+                    goto again;
                 }
             }
-            if (command(&commands, l.name.items, "quit", "", "quit the REPL")) break;
+            if (command(&commands, l.name.items, "quit", "", "quit the REPL")) goto quit;
             if (command(&commands, l.name.items, "help", "", "print this help message")) {
                 print_available_commands(&commands);
-                continue;
+                goto again;
             }
             print_available_commands(&commands);
             printf("ERROR: unknown command `%s`\n", l.name.items);
-            continue;
+            goto again;
+        }
+
+        Token_Kind a, b;
+        Cur cur = l.cur; {
+            if (!lexer_next(&l)) goto again;
+            a = l.token;
+            if (!lexer_next(&l)) goto again;
+            b = l.token;
+        } l.cur = cur;
+
+        if (a == TOKEN_NAME && b == TOKEN_EQUALS) {
+            if (!lexer_expect(&l, TOKEN_NAME)) goto again;
+            const char *name = intern(l.name.items);
+            if (!lexer_expect(&l, TOKEN_EQUALS)) goto again;
+            Expr_Index body;
+            if (!parse_expr(&l, &body)) goto again;
+            create_binding(&bindings, name, body);
+            goto again;
         }
 
         Expr_Index expr;
-        if (!parse_expr(&l, &expr)) continue;
+        if (!parse_expr(&l, &expr)) goto again;
+        for (size_t i = bindings.count; i > 0; --i) {
+            expr = app(fun(bindings.items[i-1].name, expr), clone_expr(bindings.items[i-1].body));
+        }
         bind_vars(expr);
 
-        trace_expr(expr, &sb);
+        if (trace) trace_expr(expr, &sb);
         Expr_Index expr1 = eval1(expr);
         for (size_t i = 1; (limit == 0 || i < limit) && expr1.unwrap != expr.unwrap; ++i) {
             expr = expr1;
-            gc(expr);
-            trace_expr(expr, &sb);
+            gc(expr, bindings);
+            if (trace) trace_expr(expr, &sb);
             expr1 = eval1(expr);
         }
         if (expr1.unwrap != expr.unwrap) {
-            printf("...\n");
+            printf("Evaluation limit exceeded\n");
+        } else {
+            trace_expr(expr, &sb);
         }
-
-        expr_pool.count = 0;
-        expr_dead_pool.count = 0;
     }
+    quit:
 
     return 0;
 }

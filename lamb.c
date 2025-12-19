@@ -213,6 +213,14 @@ Expr_Index var(const char *name)
     return expr;
 }
 
+Expr_Index var_var_name(Var_Name name)
+{
+    Expr_Index expr = make_expr();
+    expr_slot(expr).kind = EXPR_VAR;
+    expr_slot(expr).as.var = name;
+    return expr;
+}
+
 Expr_Index fun(const char *arg, Expr_Index body)
 {
     Expr_Index expr = make_expr();
@@ -244,10 +252,17 @@ void expr_display(Expr_Index expr, String_Builder *sb)
 {
     switch (expr_slot(expr).kind) {
     case EXPR_VAR:
-        sb_appendf(sb, "%s@%zu", expr_slot(expr).as.var.name, expr_slot(expr).as.var.id);
+        sb_appendf(sb, "%s", expr_slot(expr).as.var.name);
+        if (expr_slot(expr).as.var.id) {
+            sb_appendf(sb, "@%zu", expr_slot(expr).as.var.id);
+        }
         break;
     case EXPR_FUN:
-        sb_appendf(sb, "\\%s@%zu.", expr_slot(expr).as.fun.arg.name, expr_slot(expr).as.fun.arg.id);
+        if (expr_slot(expr).as.fun.arg.id) {
+            sb_appendf(sb, "\\%s@%zu.", expr_slot(expr).as.fun.arg.name, expr_slot(expr).as.fun.arg.id);
+        } else {
+            sb_appendf(sb, "\\%s.", expr_slot(expr).as.fun.arg.name);
+        }
         expr_display(expr_slot(expr).as.fun.body, sb);
         break;
     case EXPR_APP: {
@@ -267,6 +282,22 @@ void expr_display(Expr_Index expr, String_Builder *sb)
     }
 }
 
+bool is_var_free_there(Var_Name name, Expr_Index there)
+{
+    switch (expr_slot(there).kind) {
+    case EXPR_VAR:
+        return var_name_eq(expr_slot(there).as.var, name);
+    case EXPR_FUN:
+        if (var_name_eq(expr_slot(there).as.fun.arg, name)) return false;
+        return is_var_free_there(name, expr_slot(there).as.fun.body);
+    case EXPR_APP:
+        if (is_var_free_there(name, expr_slot(there).as.app.lhs)) return true;
+        if (is_var_free_there(name, expr_slot(there).as.app.rhs)) return true;
+        return false;
+    default: UNREACHABLE("Expr_Kind");
+    }
+}
+
 Expr_Index replace(Var_Name arg, Expr_Index body, Expr_Index val)
 {
     switch (expr_slot(body).kind) {
@@ -277,9 +308,22 @@ Expr_Index replace(Var_Name arg, Expr_Index body, Expr_Index val)
             return body;
         }
     case EXPR_FUN:
+        if (var_name_eq(expr_slot(body).as.fun.arg, arg)) return body;
+        if (!is_var_free_there(expr_slot(body).as.fun.arg, val)) {
+            return fun_var_name(expr_slot(body).as.fun.arg, replace(arg, expr_slot(body).as.fun.body, val));
+        }
+        Var_Name fresh_name = expr_slot(body).as.fun.arg;
+        static size_t id_counter = 0;
+        fresh_name.id = ++id_counter;
+        Expr_Index fresh_arg = var_var_name(fresh_name);
         return fun_var_name(
-            expr_slot(body).as.fun.arg,
-            replace(arg, expr_slot(body).as.fun.body, val));
+            fresh_name,
+            replace(arg,
+                replace(
+                    expr_slot(body).as.fun.arg,
+                    expr_slot(body).as.fun.body,
+                    fresh_arg),
+                val));
     case EXPR_APP:
         return app(
             replace(arg, expr_slot(body).as.app.lhs, val),
@@ -335,66 +379,6 @@ void trace_expr(Expr_Index expr, String_Builder *sb)
     expr_display(expr, sb);
     sb_append_null(sb);
     printf("%s\n", sb->items);
-}
-
-Expr_Index clone_expr(Expr_Index expr)
-{
-    switch (expr_slot(expr).kind) {
-    case EXPR_VAR: {
-        return var(expr_slot(expr).as.var.name);
-    } break;
-    case EXPR_FUN: {
-        return fun(
-            expr_slot(expr).as.fun.arg.name,
-            clone_expr(expr_slot(expr).as.fun.body));
-    } break;
-    case EXPR_APP: {
-        return app(
-            clone_expr(expr_slot(expr).as.app.lhs),
-            clone_expr(expr_slot(expr).as.app.rhs));
-    } break;
-    default: UNREACHABLE("Expr_Kind");
-    }
-}
-
-void bind_var(Expr_Index body, Var_Name var)
-{
-    switch (expr_slot(body).kind) {
-    case EXPR_VAR: {
-        if (expr_slot(body).as.var.name == var.name) {
-            expr_slot(body).as.var.id = var.id;
-        }
-    } break;
-    case EXPR_FUN: {
-        bind_var(expr_slot(body).as.fun.body, var);
-    } break;
-    case EXPR_APP: {
-        bind_var(expr_slot(body).as.app.lhs, var);
-        bind_var(expr_slot(body).as.app.rhs, var);
-    } break;
-    default: UNREACHABLE("Expr_Kind");
-    }
-}
-
-Expr_Index bind_vars(Expr_Index expr)
-{
-    static size_t id_counter = 1;
-    switch (expr_slot(expr).kind) {
-    case EXPR_VAR: return expr;
-    case EXPR_FUN: {
-        assert(expr_slot(expr).as.fun.arg.id == 0);
-        expr_slot(expr).as.fun.arg.id = id_counter++;
-        bind_var(expr_slot(expr).as.fun.body, expr_slot(expr).as.fun.arg);
-        bind_vars(expr_slot(expr).as.fun.body);
-        return expr;
-    } break;
-    case EXPR_APP: {
-        bind_vars(expr_slot(expr).as.app.lhs);
-        bind_vars(expr_slot(expr).as.app.rhs);
-        return expr;
-    } break;
-    default: UNREACHABLE("Expr_Kind");
-    }
 }
 
 typedef enum {
@@ -577,6 +561,7 @@ bool parse_primary(Lexer *l, Expr_Index *expr)
 bool parse_expr(Lexer *l, Expr_Index *expr)
 {
     if (!parse_primary(l, expr)) return false;
+
     if (!lexer_peek(l)) return false;
     while (l->token != TOKEN_CPAREN && l->token != TOKEN_END && l->token != TOKEN_SEMICOLON) {
         Expr_Index rhs;
@@ -799,8 +784,10 @@ again:
                 sb.count = 0;
                 goto again;
             }
-            if (command(&commands, l.name.items, "intern", "", "print amount of interned strings")) {
-                printf("Interns: %zu\n", strings.count);
+            if (command(&commands, l.name.items, "mem", "", "print memory related stats")) {
+                printf("Interned strings: %zu\n", strings.count);
+                printf("Allocated exprs:  %zu\n", expr_pool.count);
+                printf("Dead exprs:       %zu\n", expr_dead_pool.count);
                 goto again;
             }
             if (command(&commands, l.name.items, "limit", "[number]", "change evaluation limit (0 for no limit)")) {
@@ -859,9 +846,8 @@ again:
         Expr_Index expr;
         if (!parse_expr(&l, &expr)) goto again;
         for (size_t i = bindings.count; i > 0; --i) {
-            expr = app(fun(bindings.items[i-1].name, expr), clone_expr(bindings.items[i-1].body));
+            expr = app(fun(bindings.items[i-1].name, expr), bindings.items[i-1].body);
         }
-        bind_vars(expr);
 
         if (trace) trace_expr(expr, &sb);
         Expr_Index expr1 = eval1(expr);

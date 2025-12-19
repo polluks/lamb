@@ -1050,6 +1050,7 @@ again:
         lexer_init(&l, source, strlen(source), NULL);
 
         if (!lexer_peek(&l)) goto again;
+        if (l.token == TOKEN_END) goto again;
         if (l.token == TOKEN_COLON) {
             if (!lexer_next(&l)) goto again;
             if (!lexer_expect(&l, TOKEN_NAME)) goto again;

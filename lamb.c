@@ -377,7 +377,6 @@ Expr_Index eval1(Expr_Index expr)
                 expr_slot(lhs).as.fun.body,
                 rhs);
         }
-        // TODO: Introduce a #trace magic function
 
         Expr_Index new_lhs = eval1(lhs);
         if (lhs.unwrap != new_lhs.unwrap) {
@@ -757,6 +756,11 @@ void gc(Expr_Index root, Bindings bindings)
     }
 }
 
+// TODO: introduce a #trace magic function
+// TODO: delete bindings from REPL
+// TODO: save current bindings in REPL to a file
+// TODO: step debug mode instead of tracing mode
+// TODO: stop evaluation on ^C
 int main(int argc, char **argv)
 {
     static char buffer[1024];

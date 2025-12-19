@@ -913,14 +913,14 @@ void gc(Expr_Index root, Bindings bindings)
     }
 }
 
-// TODO: :reload command should reload the recently saved file
-// TODO: :save without any argument should save into the recently saved file
 // TODO: :edit command from ghci
+// TODO: :load command that loads from a specific file
 // TODO: stop evaluation on ^C
 // TODO: step debug mode instead of tracing mode
 // TODO: change evaluation order to lazy
 // TODO: something to check alpha-equivalence of two terms
 // TODO: some mechanism to reorder bindings in the REPL
+// TODO: consider changing expr_display so it displays shortened up version of exprs so on :save it all looks nice
 int main(int argc, char **argv)
 {
     static char buffer[1024];
@@ -928,8 +928,19 @@ int main(int argc, char **argv)
     static Bindings bindings = {0};
     static Lexer l = {0};
 
-    for (int i = 1; i < argc; ++i) {
-        create_bindings_from_file(argv[i], &bindings);
+    // `active_file_path` is always located on the heap. If you need to replace it, first free() it
+    // and then copy_string() it.
+    char *active_file_path = NULL;
+
+    if (argc == 2) {
+        active_file_path = copy_string(argv[1]);
+    } else if (argc > 2) {
+        fprintf(stderr, "ERROR: only a active file is support right now\n");
+        return 1;
+    }
+
+    if (active_file_path) {
+        create_bindings_from_file(active_file_path, &bindings);
     }
 
     size_t limit = 0;
@@ -961,10 +972,12 @@ again:
                 goto again;
             }
             if (command(&commands, l.string.items, "reload", "", "reload all the loaded files")) {
-                bindings.count = 0;
-                for (int i = 1; i < argc; ++i) {
-                    create_bindings_from_file(argv[i], &bindings);
+                if (active_file_path == NULL) {
+                    fprintf(stderr, "ERROR: no active file to reload from\n");
+                    goto again;
                 }
+                bindings.count = 0;
+                create_bindings_from_file(active_file_path, &bindings);
                 goto again;
             }
             if (command(&commands, l.string.items, "mem", "", "print memory related stats")) {
@@ -986,8 +999,31 @@ again:
                 printf("ERROR: binding %s was not found\n", name.label);
                 goto again;
             }
+            if (command(&commands, l.string.items, "list", "", "list all the current bindings")) {
+                static String_Builder sb = {0};
+                for (size_t i = 0; i < bindings.count; ++i) {
+                    assert(bindings.items[i].name.tag == 0);
+                    sb.count = 0;
+                    sb_appendf(&sb, "%s = ", bindings.items[i].name.label);
+                    expr_display(bindings.items[i].body, &sb);
+                    sb_appendf(&sb, ";");
+                    sb_append_null(&sb);
+                    printf("%s\n", sb.items);
+                }
+                goto again;
+            }
             if (command(&commands, l.string.items, "save", "<path>", "save current bindings to a file")) {
-                if (!lexer_expect(&l, TOKEN_STRING)) goto again;
+                if (!lexer_next(&l)) goto again;
+
+                if (l.token == TOKEN_STRING) {
+                    free(active_file_path);
+                    active_file_path = copy_string(l.string.items);
+                }
+
+                if (active_file_path == NULL) {
+                    fprintf(stderr, "ERROR: no active file to save to\n");
+                    goto again;
+                }
 
                 static String_Builder sb = {0};
                 sb.count = 0;
@@ -998,9 +1034,8 @@ again:
                     sb_appendf(&sb, ";\n");
                 }
 
-                const char *file_path = l.string.items;
-                if (!write_entire_file(file_path, sb.items, sb.count)) goto again;
-                printf("Saved all the bindings to %s\n", file_path);
+                if (!write_entire_file(active_file_path, sb.items, sb.count)) goto again;
+                printf("Saved all the bindings to %s\n", active_file_path);
                 goto again;
             }
             if (command(&commands, l.string.items, "limit", "[number]", "change evaluation limit (0 for no limit)")) {

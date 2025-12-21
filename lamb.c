@@ -1012,7 +1012,9 @@ int main(int argc, char **argv)
     static Lexer l = {0};
 
 #ifndef _WIN32
-    // TODO: Handle ctrl+c on Windows
+    // TODO(20251221-171559): Handle ctrl+c on Windows
+    //   signal() seem to be a standard thing https://en.cppreference.com/w/c/program/signal.html
+    //   Yet Linux man pages say it's not portable. We need to start that out.
     struct sigaction act = {0};
     act.sa_handler = ctrl_c_handler;
     sigaction(SIGINT, &act, NULL);
@@ -1022,7 +1024,7 @@ int main(int argc, char **argv)
     if (!editor) editor = getenv("EDITOR");
     if (!editor) editor = "vi";
 
-    // `active_file_path` is always located on the heap. If you need to replace it, first free() it
+    // NOTE: `active_file_path` is always located on the heap. If you need to replace it, first free() it
     // and then copy_string() it.
     char *active_file_path = NULL;
 
@@ -1169,6 +1171,9 @@ again:
                     printf("-> ");
                     fflush(stdin);
 
+                    // TODO: get rid of the debug REPL. Just make it step through expressions by pressing Enter.
+                    // Cancelling debug mode should be Ctrl+C which means we must sort it out on Windows.
+                    // See 20251221-171559.
                     if (!fgets(buffer, sizeof(buffer), stdin)) {
                         if (feof(stdin)) goto quit;
                         printf("\n");
@@ -1178,8 +1183,6 @@ again:
                     lexer_init(&l, buffer, strlen(buffer), NULL);
                     if (!lexer_next(&l)) goto again;
                     if (l.token == TOKEN_NAME) {
-                        // TODO: Better debug mode REPL
-                        // Should be on par in quality with the main REPL
                         if (strcmp(l.string.items, "quit") == 0) goto again;
                     }
 

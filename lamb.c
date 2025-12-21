@@ -814,12 +814,17 @@ bool lexer_peek(Lexer *l)
     return result;
 }
 
+void report_unexpected(Lexer *l, Token_Kind expected)
+{
+    lexer_print_loc(l, stderr);
+    fprintf(stderr, "ERROR: Unexpected token %s. Expected %s instead.\n", token_kind_display(l->token), token_kind_display(expected));
+}
+
 bool lexer_expect(Lexer *l, Token_Kind expected)
 {
     if (!lexer_next(l)) return false;
     if (l->token != expected) {
-        lexer_print_loc(l, stderr);
-        fprintf(stderr, "ERROR: Unexpected token %s. Expected %s instead.\n", token_kind_display(l->token), token_kind_display(expected));
+        report_unexpected(l, expected);
         return false;
     }
     return true;
@@ -1067,9 +1072,6 @@ void replace_active_file_path_from_lexer_if_not_empty(Lexer l, char **active_fil
     }
 }
 
-// TODO: some sort of way to inspect individual bindings
-//   Something like :list but for one binding.
-//   Maybe just make :list accept the name of the binding.
 // TODO: something to check alpha-equivalence of two terms with
 int main(int argc, char **argv)
 {
@@ -1193,17 +1195,59 @@ again:
 #endif // _WIN32
                 goto again;
             }
-            if (command(&commands, l.string.items, "list", "", "list all the current bindings")) {
+            if (command(&commands, l.string.items, "list", "[names...]", "list the bindings")) {
                 static String_Builder sb = {0};
-                for (size_t i = 0; i < bindings.count; ++i) {
-                    assert(bindings.items[i].name.tag == 0);
-                    sb.count = 0;
-                    sb_appendf(&sb, "%s = ", bindings.items[i].name.label);
-                    expr_display(bindings.items[i].body, &sb);
-                    sb_appendf(&sb, ";");
-                    sb_append_null(&sb);
-                    printf("%s\n", sb.items);
+                static struct {
+                    const char **items;
+                    size_t count;
+                    size_t capacity;
+                } args = {0};
+
+                args.count = 0;
+                if (!lexer_next(&l)) goto again;
+                while (l.token == TOKEN_NAME) {
+                    da_append(&args, intern_label(l.string.items));
+                    if (!lexer_next(&l)) goto again;
                 }
+                if (l.token != TOKEN_END) {
+                    report_unexpected(&l, TOKEN_NAME);
+                    goto again;
+                }
+
+                if (args.count == 0) {
+                    for (size_t i = 0; i < bindings.count; ++i) {
+                        assert(bindings.items[i].name.tag == 0);
+                        sb.count = 0;
+                        sb_appendf(&sb, "%s = ", bindings.items[i].name.label);
+                        expr_display(bindings.items[i].body, &sb);
+                        sb_appendf(&sb, ";");
+                        sb_append_null(&sb);
+                        printf("%s\n", sb.items);
+                    }
+                    goto again;
+                }
+
+                for (size_t j = 0; j < args.count; ++j) {
+                    const char *label = args.items[j];
+                    bool found = false;
+                    for (size_t i = 0; !found && i < bindings.count; ++i) {
+                        assert(bindings.items[i].name.tag == 0);
+                        if (bindings.items[i].name.label == label) {
+                            sb.count = 0;
+                            sb_appendf(&sb, "%s = ", bindings.items[i].name.label);
+                            expr_display(bindings.items[i].body, &sb);
+                            sb_appendf(&sb, ";");
+                            sb_append_null(&sb);
+                            printf("%s\n", sb.items);
+                            found = true;
+                        }
+                    }
+                    if (!found) {
+                        fprintf(stderr, "ERROR: binding %s does not exist\n", label);
+                        goto again;
+                    }
+                }
+
                 goto again;
             }
             if (command(&commands, l.string.items, "delete", "<name>", "delete a binding by name")) {

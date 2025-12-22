@@ -175,3 +175,92 @@ TRACE: bar
 TRACE: bar
 RESULT: #void
 ```
+
+## Bindings
+
+You can take any expression and assign it to a name:
+
+```
+@> id = \x.x
+Created binding id
+@>
+```
+
+Then you can use that name instead of the expression:
+
+```
+@> id 69
+RESULT: 69
+@>
+```
+
+You can reassign the existing bindings at any moment
+
+```
+@> id = \y.y
+Updated binding id
+@>
+```
+
+The bindings are not evaluated until you use them in an expression. When you enter an expression which contains the names of the bindings into the REPL to evaluated, first things that happens is the binding names are substituted with their corresponding values before starting evaluation. The bindings are substituted in a reversed order, so be careful with the order in which you create the bindings. Reassigning already existing bindinsg does not change their order. You have to `:delete` the binding first and create it again to affect its order.
+
+To list all available bindings use `:list` command:
+
+```
+@> a = 69
+Created binding a
+@> b = 420
+Created binding b
+@> c = 1337
+Created binding c
+@> :list
+id = \y.y;
+a = 69;
+b = 420;
+c = 1337;
+@>
+```
+
+You can save current bindings to a file with `:save` command:
+
+```
+@> id = \x.x
+Created binding id
+@> const = \x.y.x
+Created binding const
+@> true = const
+Created binding true
+@> false = \x.y.y
+Created binding false
+@> :save main.lamb
+Saved all the bindings to main.lamb
+@> :q
+$ cat main.lamb
+id = \x.x;
+const = \x.y.x;
+true = const;
+false = \x.y.y;
+$
+```
+
+You can load the bindings with the `:load` command:
+
+```
+@> :load main.lamb
+Created binding id
+Created binding const
+Created binding true
+Created binding false
+@> :list
+id = \x.x;
+const = \x.y.x;
+true = const;
+false = \x.y.y;
+@>
+```
+
+IMPORTANT! The bindings in the bindings file are separate with semicolon `;`.
+
+Repeating `:load` or `:save` without an argument applies it the last saved or loaded file (a.k.a. the active file).
+
+We provided a bunch of useful bindings in [std.lamb][./std.lamb].
